@@ -1,0 +1,95 @@
+
+from fastapi import FastAPI,Form
+
+
+from fastapi.middleware.cors import CORSMiddleware
+
+from fastapi.responses import JSONResponse
+from database import driver
+
+from pydantic import BaseModel
+
+class UserCreate(BaseModel):
+    username: str
+    email: str
+
+
+router=FastAPI()
+
+router.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5500","http://127.0.0.1:8004", "http://localhost:8004","http://localhost:8002","http://127.0.0.1:8002","http://localhost:8003","http://127.0.0.1:8003","http://localhost:8082","http://127.0.0.1:8082",
+        "http://127.0.0.1:8009","http://localhost:5500",
+         
+    ],  # your frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@router.get("/")
+def root():
+    return {"Connection":"Successful"}
+     
+
+@router.post("/unfollow")
+def unfollow_user(follower_id: int = Form(...), following_id: int = Form(...)):
+    with driver.session() as session:
+        session.run("""
+            MATCH (a:User {id: $follower_id})-[r:FOLLOWS]->(b:User {id: $following_id})
+            DELETE r
+        """, follower_id=follower_id, following_id=following_id)
+    return {"message": "Unfollowed"}
+
+
+ 
+
+@router.post("/create_user_no_sql")
+def create_user(user: UserCreate):
+    with driver.session() as session:
+        session.run(
+            """
+            CREATE (u:User {username: $username, email: $email})
+            """,
+            username=user.username,
+            email=user.email
+        )
+    return {"message": "User created successfully"}
+
+
+ 
+
+@router.post("/follow")
+def follow_user(follower_id: int = Form(...), following_id: int = Form(...)):
+    with driver.session() as session:
+        session.run("""
+            MERGE (a:User {id: $follower_id})
+            MERGE (b:User {id: $following_id})
+            MERGE (a)-[:FOLLOWS]->(b)
+        """, follower_id=follower_id, following_id=following_id)
+
+    return JSONResponse(
+        status_code=201,
+        content={"message": f"User {follower_id} now follows {following_id}"}
+    )
+
+
+@router.get("/followings/{user_id}")
+def get_followings(user_id: int):
+    with driver.session() as session:
+        result = session.run("""
+            MATCH (:User {id: $user_id})-[:FOLLOWS]->(f:User)
+            RETURN f.id AS following_id
+        """, user_id=user_id)
+        return {"followings": [record["following_id"] for record in result]}
+
+@router.get("/suggestions/{user_id}")
+def suggest_friends(user_id: int):
+    with driver.session() as session:
+        result = session.run("""
+            MATCH (:User {id: $user_id})-[:FOLLOWS]->(:User)-[:FOLLOWS]->(suggested:User)
+            WHERE NOT (:User {id: $user_id})-[:FOLLOWS]->(suggested)
+              AND suggested.id <> $user_id
+            RETURN DISTINCT suggested.id AS suggestion
+        """, user_id=user_id)
+        return {"suggestions": [record["suggestion"] for record in result]}
